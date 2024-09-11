@@ -1,0 +1,1563 @@
+---
+title: "Working with Lidar Data in R"
+author: "Mickey Campbell"
+date: "2024-09-11"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    toc-expand: 1
+    code-fold: true
+    code-summary: "Show Me the Code!"
+    code-tools: true
+---
+
+::: {.callout-note title="Before You Begin..."}
+To successfully work your way through this exercise requires that you have: (1) a working computer with at least four cores, at least 8GB of RAM, at least 2GB free storage (local or network); (2) R installed (the exercise is generated on a machine with R 4.4.1, but that's not a strict requirement), perhaps along with your IDE of choice (e.g., RStudio); and (3) an internet connection. The first requirement may be somewhat flexible, but data processing may be slow with a less capable computer.
+:::
+
+::: {.callout-note title="For More Information..."}
+This exercise only scratches the surface of working with lidar data using `lidR` in R. The author of the `lidR` library has created a much more comprehensive document describing a greater proportion of its functionality, which can be found here: [https://r-lidar.github.io/lidRbook/](){target="_blank"}.
+:::
+
+# A quick introductory note for those looking to focus on the code
+
+In this document, I have tried to supply a useful amount of background information so that, in addition to simply knowing what code to apply when, you have a cursory understanding of the fundamentals of data upon which this exercise is based. If you are here just for the R code, then I have tried to make those sections easy to visually target:
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">All steps where you have to do something specific will look like this.
+:::
+
+# 1. A Brief Primer on Lidar
+
+## a. What is lidar?
+
+- **Li**ght **D**etection **A**nd **R**anging
+- Sometimes abbreviated **LiDAR**, but let's be civil and use **lidar**
+- The general lidar process:
+  - Laser pulses are emitted from a sensor
+  - They interact with (reflect off/get absorbed by/transmit through) some object
+  - Some portion of energy is reflected back to the sensor
+  - The timing of this process gives you sensor-object distance
+  - Add in sensor position and pulse angle, you've got precise x, y, z location of object
+
+## b. Types of lidar
+
+There are two main types of lidar:
+
+::: {#fig-typesoflidar}
+[![](https://www.researchgate.net/publication/341584588/figure/fig1/AS:894159279882241@1590195593708/Discrete-LiDAR-system-generating-four-returns-from-a-single-emitted-pulse-versus-waveform_W640.jpg)](https://doi.org/10.1080/10095020.2020.1761763)
+
+Types of lidar from [Salas (2021)](https://doi.org/10.1080/10095020.2020.1761763){target="_blank"}.
+:::
+
+**1. Discrete return lidar**
+
+  - Sometimes referred to as "small footprint" lidar
+  - A pulse's returned (backscattered/reflected) energy is discretized into modes, representing one or more surfaces the pulse interacted with
+  - The result is one or more points in x, y, z space for each pulse
+  - Repeat this a billion times or so, and you've got **a point cloud**
+  - Much more common, particuarly with terrestrial and airborne lidar
+  - **The focus of this exercise**
+  
+**2. Full waveform lidar**
+
+  - Sometimes referred to as "large footprint" lidar
+  - A pulse's returned energy is measured as a continuous energetic profile, capturing a more nuanced representation of the surface(s) the pulse ineracted with
+  - Much less common, but has gained traction in satellite lidar systems
+  
+## c. Lidar platforms
+
+Lidar instruments can be mounted on several different platforms, with each serving its own purpose and having its own set of strenghts and weaknesses.
+
+**1. "Terrestrial" (stationary)**
+
+  - I put "terrestrial" in quotes because the next type (mobile) is also technically terrestrial (i.e., ground-based), but the type I'm referring to here is from a **stationary** terrestrial platform
+  - Commonly referred to as **terrestrial laser scanning (TLS)**
+  - Typically mounted on a tripod
+  - Common in engineering and forestry
+  - Yields **extreme** 3D structural detail, but only at very local scales
+  - Requires multiple placements and georeferencing, merging of data to avoid occlusion problems
+        
+::: {#fig-tls}
+![](https://www.earthscope.org/app/uploads/2024/07/Terrestrial-laser-scanner-experimental-setup-The-white-spheres-are-targets-used-when.png)
+
+Example of a TLS setup in a forest from  [earthscope.org](https://www.earthscope.org/app/uploads/2024/07/Terrestrial-laser-scanner-experimental-setup-The-white-spheres-are-targets-used-when.png){target="_blank"}.
+:::
+  
+**2. Mobile**
+
+  - Commonly referred to as **mobile laser scanning (MLS)**
+  - Can be handheld, backpack-mounted, vehicle-mounted, etc.
+  - Newer technology than TLS, but gaining traction in a variety of fields where stationary TLS dominate
+  - Also yields **extreme** 3D structural detail, with slightly lower positional accuracy/precision, and potentially at somewhat broader spatial scales scales
+  - Mitigates occlusion problems as the sensor can move through an environment, around obstacles, etc.
+  - Relies on **simultaneous localization and mapping (SLAM)** technology, which builds a point cloud dynamically as the sensor moves, by simultaneously mapping the structure of its surroundings and recognizing its own position within those surroundings
+  
+::: {#fig-mls}
+![](https://lh3.googleusercontent.com/pw/AP1GczOQ7kKpiKfNpuL19ZLfKWzAC7S1DlOJ3T_NedMRYWeonFlHiL05nIHU0a2bn_o6e_cxnBJHM7sM5t8UOH0uM01i4MqH7iyeDuz98pECBNbslntJE-IyfWWtUkMe5ioMpovDA33Eb70qgL-pfy8nwYa4pA=w1225-h919-s-no-gm?authuser=0)
+
+Example of the U's own Jack Jones wearing a backpack-mounted MLS.
+:::
+  
+**3. Airborne**
+
+  - Commonly referred to as **airborne laser scanning (ALS)**
+  - Historically almost exclusively mounted on occupied, fixed-wing aircraft (i.e., planes)
+  - Increasingly being mounted on unoccupied aerial systems (i.e., drones)
+  - Much better source of data for broad-scale mapping than terrestrial or mobile
+  - But point densities tend to be considerably lower:
+    - 1000+ pts/m^2^ for terrestrial/mobile
+    - 100 - 500 pts/m^2^ for UAS lidar
+    - 1 - 20 pts/m^2^ for traditional ALS
+  - Potentially some canopy occlusion problems in densely-vegetated areas, given the top-down view
+  
+::: {#fig-als}
+![](https://gmv.cast.uark.edu/wp-content/uploads/2013/01/ALS_scematic.jpg)
+
+ALS schematic from [Geospatial Modeling & Visualization at University of Arkansas](https://gmv.cast.uark.edu/wp-content/uploads/2013/01/ALS_scematic.jpg){target="_blank"}.
+:::
+
+**5. Satellite**
+
+  - Rarely referred to as **spaceborne/satellite laser scanning (SLS)**
+  - Only source of global or near-global terrain/vegetation structure
+  - However, existing systems (e.g., ICESat-2, GEDI) collect data in large, discrete footprints, representing a sample of the landscape, rather than a spatially exhaustive scan of an area of interest
+  
+::: {#fig-sls}
+![](https://daac.ornl.gov/GEDI/guides/GEDI_L3_LandSurface_Metrics_V2_Fig5.png)
+
+The spatial dimensions of GEDI footprint-level satellite lidar data from [Oak Ridge National Laboratory](https://daac.ornl.gov/GEDI/guides/GEDI_L3_LandSurface_Metrics_V2_Fig5.png){target="_blank"}.
+:::
+
+::: {style="font-size: 150%;"}
+**The focus of the remainder of this exercise will be on airborne lidar.**
+:::
+
+That said, the information provided could be readily applicable to any discrete-return lidar system.
+
+## d. Lidar data formats
+
+The most common format for discrete-return lidar point cloud data is a **LAZ** file (e.g., lidar_data.laz). LAZ files are a lossless compression of **LAS** files, which was the industry standard lidar data format for a long time. LAS files are still used somewhat, but given the vastly reduced file sizes of LAZ, LAZ has largely replaced LAS.
+
+The standard file format for LAZ files can be found in the [American Society of Photogrammetry & Remote Sensing's LAS Specification guide](https://www.asprs.org/wp-content/uploads/2019/03/LAS_1_4_r14.pdf){target="_blank"}. At their core, point clouds are simply tabular data with x, y, and z coordinates, along with a suite of other (potentially) useful attributes. I'll highlight the most important ones you're likely to use below:
+
+- **X:** the x coordinate of a point return (e.g., UTM East)
+- **Y:** the y coordinate of a point return (e.g., UTM North)
+- **Z:** the z coordinate of a point return (e.g., elevation)
+- **Intensity:** the amount of energy returned to the sensor for a point return
+- **ReturnNumber:** 1st return, 2nd return, etc.
+- **NumberOfReturns:** how many returns were associated with each pulse
+- **Classification:** a numeric classification system for describing what land cover type a return is associated with
+
+There are many others, but these are the ones you are most likely to use.
+
+## e. Lidar data sources
+
+In the US, the two best sources of airborne lidar data are [**The USGS 3D Elevation Program (3DEP)**](https://www.usgs.gov/3d-elevation-program){target="_blank"} and [**OpenTopography**](https://opentopography.org/){target="_blank"}. The USGS, of course, has a lengthy history of terrain mapping in the US with its production of topographic maps dating back to the late 19th century. Beginning in 2016, the USGS set about to collect airborne lidar over all of the contiguous US. Less than a decade later, the vast majority of the CONUS has been scanned:
+
+::: {style="font-size: 150%; text-align: center"}
+[**View Lidar Data Availability on The National Map**](https://apps.nationalmap.gov/downloader/#/){target="_blank"}
+:::
+
+It is worth noting that 3DEP has different nominal **quality levels (QL)**:
+
+| Quality Level | Vertical Accuracy RMSE | Nominal Pulse Spacing | Nominal Pulse Density |
+|:-------------:|:----------------------:|:---------------------:|:---------------------:|
+| QL0           | 5 cm                   | <= 0.35 m             | >= 8 pts/m^2^         |
+| QL1           | 10 cm                  | <= 0.35 m             | >= 8 pts/m^2^         |
+| QL2           | 10 cm                  | <= 0.71 m             | >= 2 pts/m^2^         |
+
+: USGS 3DEP Quality Levels {#tbl-3depql}
+
+Note that these are **minimum standards** -- most USGS QL1 data, for example, has considerably higher pulse density than 8 pts/m^2^. Furthermore, the *point* density is always higher than this, given that pulses return multiple points (usually 1-4).
+
+**OpenTopography** is an NSF-funded facility based at UC San Diego that ingests and serves up all of the USGS 3DEP data in addition to a variety of non-USGS lidar datasets (ALS, TLS, and photogrammetric point clouds). It also offers some basic but potentially very valuable data processing capacities, such as point cloud reprojection and derivation of raster products.
+
+::: {style="font-size: 150%; text-align: center"}
+[**View Lidar Data Availability on OpenTopography**](https://portal.opentopography.org/datasets){target="_blank"}
+:::
+
+For what it's worth, I typically get data directly from the USGS for a few reasons:
+
+1. The data are delivered in their native, tiled format (usually 1x1km), which most lidar processing software is well-suited to handle.
+2. You can easily interact with the [FTP site](https://rockyweb.usgs.gov/vdelivery/Datasets/Staged/Elevation/LPC/Projects/){target="_blank"} for data downloading.
+3. You can efficiently query The National Map's API (e.g., using some basic R or Python code) for spatially explicit data requests.
+
+## f. Lidar processing software
+
+As with any dataset (especially spatial data), there is a multitude of software options for processing, analyzing, and viewing lidar point cloud data. I won't even come close to listing them all, but I will point out a few that warrant mentioning.
+
+**1. LAStools**
+
+  - [LAStools](https://rapidlasso.de/product-overview/){target="_blank"} was one of the first major players in the lidar data processing world. It is one of the best available options for processing large quantities of data very efficiently. Historically it was a purely command line-based software program, and for complex data pipelines (and making LAStools calls from R, Python, etc.) the command line interface is still preferable. However, they have made strides towards making things a little more user friendly with GUIs. To access the full functionality of LAStools does require a license, but several of the tools are free to use. 
+
+**2. CloudCompare**
+
+  - [CloudCompare](https://www.cloudcompare.org/main.html){target="_blank"} is an open source software package for viewing, editing, and processing point cloud data. It is less efficient from a processing standpoint than LAStools, but much more user friendly, particularly for tasks requiring interacting directly with the point cloud. In our lab, we use CloudCompare for georeferencing point clouds, as it is by far one of the fastest and most efficient programs for viewing and navigating through point cloud data.
+
+**3. Python (pdal)**
+
+  - [PDAL](https://pdal.io/en/2.7.2/){target="_blank"} is an open source C/C++ library akin to GDAL for efficiently processing point cloud data that has gained considerable momentum recently as a leading tool for processing lidar data. It has a well-supported Python API (package name: `pdal`) and is built on the concept of building point cloud processing piplines using JSON syntax.
+
+**4. R (lidR)**
+
+  - [lidR](https://github.com/r-lidar/lidR){target="_blank"} is an R package from Jean-Romain Roussel that encompasses an impressively wide range of functionality. It features (in my opinion) unparalleled flexibility to tailor lidar data processing tasks to suit your needs with intuitive, simple R syntax. It supports parallelization in several ways, making processing tasks relatively efficient, though it is definitely less efficient than LAStools.
+
+::: {style="font-size: 150%;"}
+**In this exercise, we will focus on using lidR in R to analyze lidar data.**
+:::
+
+# 2. Downloading Lidar Data
+
+## a. Option 1: Download data from The National Map
+
+For the purposes of this exercise, we will need some lidar data to play with. Please follow the instructions below to download a few tiles of lidar data.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Visit [**The National Map Data Downloader**](https://apps.nationalmap.gov/downloader/#/){target="_blank"}.</span>
+
+- [ ] <span style="color:indianred;">Check the box next to *Elevation Source Data (3DEP) - Lidar, IfSAR*.</span>
+
+- [ ] <span style="color:indianred;">Make sure *Lidar Point Cloud (LPC)* is checked and click *Show* underneath to reveal the areas of CONUS that have airborne lidar data avaiable for download.</span>
+
+- [ ] <span style="color:indianred;">Click *Show Legend* to inform your interpretation of the map colors.</span>
+
+- [ ] <span style="color:indianred;">Zoom into an area of interest. The exercise will be demonstrating mapping terrain and vegetation in the Wasatch Mountains. You can feel free to zoom into any area of interest, but if there is no terrain or vegetation, then your experience might be a little unexciting.</span>
+
+- [ ] <span style="color:indianred;">Under *Area of Interest* on the left panel, select *Polygon*.</span>
+
+- [ ] <span style="color:indianred;">Draw a polygon on the map around your area of interest and click *Search Products*.</span>
+:::
+
+::: {.callout-tip title="Number of Lidar Tiles"}
+**Keep in mind that the goal of this exercise is to download four tiles of lidar data.** The USGS typically tiles up its lidar data into 1 x 1 km boxes, so you should try (to the best of your ability) to draw a 2 x 2 km polygon. You will likely have to iterate on this several times before you get the scale right. You can feel free to download more tiles, but know that lidar data are quite large in size, and processing more tiles will not only require more storage capacity and memory, but also processing time.
+:::
+
+::: {.callout-tip title="Number of Lidar Projects"}
+**We also want lidar tiles from the same "project"**. The 3DEP program is sort of a hodgepodge of individual lidar data collection campaigns (or, "projects") that are collected through local, state, and federal partnerships. Unfortunately this makes life a little complicated, as different projects are collected with different specifications, at different times, with different projections, etc. So, for the sake of this exercise, you're going to want to download four tiles within the same project. You can tell they are a part of the same project based on the file names that are returned after clicking *Search Products*. They should all have the same prefix and *Published Date*. As you hover over them, their footprints will be highlighted on the map.
+:::
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Once you have identified four adjacent tiles of lidar data from the same project you would like to download, click *Download Link (LAZ)* next to each of your tiles in the file list.</span>
+
+- [ ] <span style="color:indianred;">Store the files wherever you would like, but you might consider **creating a dedicated folder structure for this exercise**. One example would be the following:</span>
+  - <span style="color:indianred;">...\\lidar_exercise (main directory)</span>
+    - <span style="color:indianred;">...\\lidar_data (lidar directory)</span>
+      - <span style="color:indianred;">...\\a01_raw (where you should download these "raw" lidar tiles)</span>
+      - <span style="color:indianred;">...\\a02_dtm (where you will eventually store DTM raster tiles)</span>
+      - <span style="color:indianred;">...\\a03_dsm (where you will eventually store DSM raster tiles)</span>
+      - <span style="color:indianred;">...\\a04_hgt (where you will eventually store height-normalized lidar tiles)</span>
+      - <span style="color:indianred;">...\\a05_chm (where you will eventually store CHM raster tiles)</span>
+      - <span style="color:indianred;">...\\a06_veg (where you will eventually store vegetation structure raster tiles)</span>
+    - <span style="color:indianred;">...\\other_data (lidar directory)</span>
+    
+:::
+
+## b. Option 2: Download the example data from Box.
+
+If you don't want to bother with trying to identify the four, single-project, "perfect" lidar tiles for this exercise, then you can simply download the four example tiles used in this exercise. They cover the base and some of the lower ski runs at Alta Ski Area. You can access them here:
+
+::: {style="font-size: 150%; text-align: center"}
+<span style="color:indianred;">[Example Data](https://drive.google.com/file/d/1V0ODuryLkWcN3dr3rgIakLtfVt5Hpg_9/view?usp=sharing){target="_blank"}</span>
+:::
+
+# 3. Open R and Install Packages
+
+Now, onto the fun part! In this part of the exercise, we are going to open everyone's favorite statistical software package (R!) and install all of the libraries necessary for the successful execution of the remainder of this exercise.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Open R (or RStudio or whatever R IDE you prefer)
+
+- [ ] <span style="color:indianred;">In a script editor or in the console, install all of the following packages from CRAN using the `install.packages()` function:</span>
+  - <span style="color:indianred;">[**sf**](https://github.com/r-spatial/sf){target="_blank"}: Simple Features for R -- an excellent spatial library for working with vector data. A lot of `lidR`'s functionality is dependent upon `sf`.</span>
+  - <span style="color:indianred;">[**terra**](https://github.com/rspatial/terra){target="_blank"}: Spatial Data Analysis -- another R spatial powerhouse of a library, particulalry useful for manipulation of raster data. Often, we derive rasterized outputs from lidar data, so `lidR` also depends heavily on `terra`.</span>
+  - <span style="color:indianred;">[**lidR**](https://github.com/r-lidar/lidR){target="_blank"}: Airborne LiDAR Data Manipulation and Visualization for Forestry Applications -- the primary focus of this exercise.</span>
+  - <span style="color:indianred;">[**viridis**](https://github.com/sjmgarnier/viridis){target="_blank"}: Colorblind-Friendly Color Maps for R -- a library for generating nice color palettes.</span>
+  - <span style="color:indianred;">[**future**](https://github.com/HenrikBengtsson/future){target="_blank"}: Unified Parallel and Distributed Processing in R for Everyone -- a library that facilitates parallel processing of point cloud data.
+  
+:::
+
+```{r}
+#| message: false
+#| warning: false
+#| eval: false
+
+# install packages
+install.packages("sf")
+install.packages("terra")
+install.packages("lidR")
+install.packages("viridis")
+install.pacakges("future")
+```
+
+```{r}
+#| echo: false
+options(lidR.progress = F)
+```
+
+# 4. Loading Libraries and Data
+
+The next steps are to load the libraries we just installed (using the `library()` function) and read in our lidar data. There are two main ways to read in lidar data in `lidR`:
+
+1. `readLAS()` allows you to read in a single LAS/LAZ file of lidar data.
+2. `readLAScatalog()` allows you to read in several tiles at once.
+
+The vast majority of the time, you will be relying on #2, as `readLAScatalog()` creates a `LAScatalog` object that enables parallel processing of several tiles at once, including an awareness of tile topology, which avoids edge artifact issues. For more on the `LAScatalog` class, please consult [this vignette](https://cran.r-project.org/web/packages/lidR/vignettes/lidR-LAScatalog-class.html){target="_blank"}.
+
+In the script editor, write code that accomplishes the following:
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Load the libraries you just installed
+
+- [ ] <span style="color:indianred;">Define your folder and file structure
+
+- [ ] <span style="color:indianred;">Read in a single tile of lidar data
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# load libraries
+library(sf)
+library(terra)
+library(lidR)
+library(viridis)
+library(future)
+
+# define directory structure
+main_dir <- "C:/Users/u0942838/Documents/lidar_exercise"
+lidar_dir <- file.path(main_dir, "lidar_data")
+raw_dir <- file.path(lidar_dir, "a01_raw")
+dtm_dir <- file.path(lidar_dir, "a02_dtm")
+dsm_dir <- file.path(lidar_dir, "a03_dsm")
+hgt_dir <- file.path(lidar_dir, "a04_hgt")
+chm_dir <- file.path(lidar_dir, "a05_chm")
+veg_dir <- file.path(lidar_dir, "a06_veg")
+other_dir <- file.path(main_dir, "other_data")
+
+# read in single tile of lidar data
+tile_files <- list.files(
+  path = raw_dir,
+  pattern = "*.laz$",
+  full.names = T
+)
+tile_file <- tile_files[1]
+las <- readLAS(tile_file)
+```
+
+```{r}
+#| echo: false
+
+library(rmarkdown)
+```
+
+In the example above, you'll notice the use of the variable name `las` for the `LAS` object returned by the call to `readLAS()`. This might be a little confusing, since we're using LAZ files (not LAS) files, but this is merely a naming convention used within the `lidR` ecosystem. You can, of course, feel free to name variables whatever suits your style, but know that all references henceforth will assume your data are stored as `las`.
+
+# 5. Explore the Data
+
+## a. Summary information
+
+Let's do some data exploration:
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">In your script or the console, type `las` and press *Enter* to reveal a summary of its contents.
+:::
+
+```{r}
+# print las summary
+las
+```
+
+This yields several valuable pieces of information, including the total (uncompressed) memory required to store these data, the spatial extent, the coordinate reference system, the total area covered by the tile, the number of points in the dataset, as well as the point (1st) and pulse (2nd) densities.
+
+## b. LAS attributes
+
+Next, let's take a look at the attributes contained within the data. Underneath the hood of each `LAS` object, there is a `data.table` containing each point's attributes. To access the table, you can use `las@data`.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Run `las@data` to reveal the underlying attributes
+:::
+
+```{r}
+#| eval: false
+
+# explore the attributes
+las@data
+```
+
+```{r}
+#| echo: false
+
+# explore the attributes
+paged_table(las@data)
+```
+
+## c. Point cloud visualization
+
+Next, we'll do some point cloud visualization. Depending on how big your file is and how capable your computer is, this next step may go better or worse. Visualizing point clouds is a fairly computationally (graphically) expensive procedure, given that you're trying to visualize millions of points in 3D. But, let's give it a shot! You can visualize point clouds using the `plot()` function.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Run `plot(las)` to plot the point cloud
+:::
+
+```{r}
+#| eval: false
+
+# plot the point cloud out
+plot(las)
+```
+
+Like any R plotting function, there are lots of ways to alter your data visualization by manipulating the parameters supplied to `plot()`. For a full accounting of them, you can enter `?lidR::plot()`.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">By default, the point cloud displays the `Z` attribute. Try changing this to `Intensity` to color points by the return intensity. Note that you may also have to change `breaks` to enhance the contrast to a useful degree.</span>
+:::
+
+```{r}
+#| eval: false
+
+# plot point intensity
+plot(las, color = "Intensity", breaks = "quantile", nbreaks = 50)
+```
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Plot intensity again, but with axes and a legend included.</span>
+:::
+
+## d. A brief aside on return intensity
+
+Lidar return intensity is *theoretically* a very interesting and useful variable. It measures how much of a laser's pulse energy is returned to the sensor for a particular return. There are several factors that affect return intensity:
+
+**1. The reflective properties of the surface the pulse interacted with**
+
+  - Environmental optics are difficult to concisely describe in a single bullet point, but generally speaking, different surfaces reflect electromagnetic energy differently. A tree's leaves are green because they absorb more red and blue light and reflect more green light, for example. Most lidar sensors operate in the near-infrared portion of the spectrum (most commonly, 1064 nm). Accordingly, surfaces that reflect more near infrared light are likely to have higher return intensity.
+  
+::: {#fig-spectra}
+![](https://seos-project.eu/classification/images/spectral_signatures_landsat.jpg)
+
+Example reflectance spectra from  [seos-project.eu](https://seos-project.eu/classification/classification-c01-p05.html){target="_blank"}.
+:::
+  
+**2. The geometric properties of the surface**
+
+  - Rough surfaces are more likely to produce diffuse backscattering (Lambertian reflectance) of lidar pulse energy in comparison to smooth surfaces, which will feature more specular reflectance. Therefore, smooth surfaces may yield higher return intensities as well.
+  
+::: {#fig-reflectance}
+![](https://www.oreilly.com/api/v2/epubs/9781788629690/files/assets/9fefc2f3-a738-4958-aad9-e68189f583da.png)
+
+Lambertian and specular reflectance from [oreilly.com](https://www.oreilly.com/api/v2/epubs/9781788629690/files/assets/9fefc2f3-a738-4958-aad9-e68189f583da.png){target="_blank"}.
+:::
+  
+**3. The pulse angle**
+
+  - Low-angle pulses (i.e., those emitted directly below a sensor) are more likely to have higher return intensity, as the distribution of returned energy is likely to be concentrated in the reflective angle. Conversely, high pulse angles are more likely to yield lower return intensities, as less energy is likely to be reflected back to the sensor. In fact, sometimes a pulse angle threshold is applied to lidar data to remove data above a certain threshold, as it is assumed that high pulse angle data may be more erroneous due to low energy signals.
+  
+**4. The lidar-surface range**
+
+  - As laser beams get farther from the sensor, their energy becomes dispersed over a larger area, which effectively reduces the amount of energy, per unit area, that is received by some reflective surface. In turn, a lower amount of energy may be reflected back to the sensor, decreasing return intensity.
+
+::: {#fig-divergence}
+![](https://www.laserworld.com/images/Showlaser_Guide/Beam_Specifications.jpg)
+
+Beam divergence from [laserworld.com](https://www.laserworld.com/en/divergence.html){target="_blank"}.
+:::
+
+**5. Multiple returns**
+
+  - When a lidar pulse interacts with multiple surfaces, each return reflects some portion of the pulse's original energy back to the sensor. Therefore, return intensity may be lower for non-first returns.
+  
+::: {#fig-multireturn}
+![](https://www.researchgate.net/publication/346745170/figure/fig3/AS:11431281211889065@1702506227536/Principle-of-multiple-return-LiDAR-systems_W640.jpg)
+
+Multiple lidar returns from [Li et al. (2020)](http://dx.doi.org/10.1088/1361-6501/abc867){target="_blank"}.
+:::
+
+**6. Sensor specifications**
+
+  - There is no universal standard for how intensities are measured, quantized, and delivered across sensors. Unlike satellite remote sensing data, which are regularly captured from the same sensor over space and time, airborne lidar from programs such as the USGS 3DEP represent a compilation of many indiviudal airborne campaigns, flown by different vendors, with different sensors. Therefore, comparing intensity values between different lidar projects is very difficult to do.
+  
+Taking all of that into consideration, this is why I have said that intensity is a *theoretically* interesting and useful metric. There are plenty of scientists using intensity to gain some understanding of surface type (in addition to merely surface position), but it's a challenging pursuit!
+
+## e. Noise in your data
+
+If you're using the point cloud data provided in this exercise, when you plot out the first point cloud, you will see that there are some erroneous points far above and below the true land surface. Unfortunately, **noise points like these are not uncommon in discrete-return airborne lidar data**. Fortunately, the USGS or the vendors who collected the data will typically run some processes to classify these points as noise, allowing users like us to filter them out. Looking back at the [LAS Specification 1.4](https://www.asprs.org/wp-content/uploads/2019/03/LAS_1_4_r14.pdf){target="_blank"} (Table 17), we can see that there are two noise classes (7 and 18). Let's use this as an opportunity to see the distribution of different classes in the `Classification` attribute of our point cloud data.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Use the `table()` function to summarize the counts of each class in the `Classification` field of your point cloud data.</span>
+:::
+
+```{r}
+# summarize class totals
+table(las$Classification)
+```
+
+::: {.callout-tip title="Accessing Lidar Attributes"}
+**Note that, when using the dollar sign approach for subsetting, you can access attributes in two different ways.** You can do so using the `las@data$Classification` syntax, or you can simply use `las$Classification`. However, if you want to subset a column using brackets, you can only do so using the `@data` approach (e.g., `las@data[,"Classification"]`).
+:::
+
+In the example data, it looks like some points have been pre-classified as both **7: Low Point (Noise)** and **18: High Noise**. Your dataset may not have these, but **they should at least have classes 1 (Unclassified) and 2 (Ground)**. If not, you may reconsider using these data for the remainder of the exercise. It's also worth noting that, when looking at Table 17 in the [LAS Specification 1.4](https://www.asprs.org/wp-content/uploads/2019/03/LAS_1_4_r14.pdf){target="_blank"}, there are many other classes (e.g., "Low Vegetation", "Building", etc.). Seeing this table gives the impression that lidar point clouds are regularly classified into these classes. The reality is that **the vast majority of point clouds you download will only have classes 1, 2, 7, and 18 classified**. You can certainly perform classifications yourself using several different approaches, but most point clouds are delivered in a somewhat "bare bones" fashion, given the challenge of accurately classifying billions of points.
+
+Another attribute of interest that can sometimes be useful for removing bad data is the `Withheld_flag`. There seems to be a somewhat hazy distinction between noise points and withheld points, and most typically points that are classified as noise (i.e., either 7 or 18) will also be flagged to be withheld. But, there are instances in which they may not nest cleanly.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Use the `table()` function to summarize the number of withheld points.</span>
+
+- [ ] <span style="color:indianred;">Use `table()` again to cross-tabular withheld points and point classification.</span>
+:::
+
+```{r}
+# tabulate withheld point flags
+table(las$Withheld_flag)
+
+# cross-tabular withheld flag with classification
+table(las@data[,c("Withheld_flag", "Classification")])
+```
+
+In this case, all noise points are also withheld.
+
+# 6. Filtering Data
+
+Knowing that we have some noisy data on our hands, we are now going to filter out those points in order to ensure that any products we derive from the point cloud data are as accurate as possible. Noise filtering is a fairly standard part of any lidar data processing workflow. There are two ways to remove points pre-classified as noise from your point cloud:
+
+**1. When loading the data (preferred)**
+
+  - This is accomplished by supplying a character string to the `filter` argument in the `readLAS()` function.
+
+**2. After the data are loaded (less preferred)**
+
+  - This is accomplished using the `filter_poi()` function.
+  
+Technically both are viable, but the former is more efficient in that it never has to read the noisy points into memory as they are ignored entirely. So, let's proceed with that approach.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Run `readLAS(filter = "-help")`. This will print out all of the filters you can use.</span>
+
+- [ ] <span style="color:indianred;">Figure out how to leverage these filters to remove noise points, and re-read in your data using `readLAS()`.</span>
+
+- [ ] <span style="color:indianred;">Tabulate the data in your `Classification` column again to make sure there are no noise points remaining.</span>
+
+- [ ] <span style="color:indianred;">Plot your data again to see if there are any noise points evident (i.e., those that may have been missed by the USGS or vendor's noise classification algorithm).</span>
+:::
+
+```{r}
+# read in the data while filtering out noise
+las <- readLAS(tile_file, filter = "-drop_class 7 18")
+
+# tabulate classification
+table(las$Classification)
+```
+
+```{r}
+#| eval: false
+
+# plot the data out
+plot(las)
+```
+
+In the example data, there do not appear to be any obvious, remnant noise points after removing those already classified as noise (or flagged as withheld). **However, if your data do appear to still have some noise (which is not uncommon!), you can do the following:**
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Classify noise points using `classify_noise()`. Note that there are several algorithms that could be employed towards this end, each of which has its own set of parameters.</span>
+
+- [ ] <span style="color:indianred;">Remove those points using `filter_poi()`. I know I just suggested *not* using this function, but in situations like this (where you are modifying the existing data to add new noise classifications), it actually makes sense to use.</span>
+:::
+
+```{r}
+#| eval: false
+
+# run noise classification using statistical outlier removal (sor) algorithm
+# with default parameters
+las <- classify_noise(las, sor())
+
+# remove those points
+las <- filter_poi(las, !(Classification %in% c(7, 18)))
+```
+
+Note that `lidR` functions are well-suited to the tidyverse or native R pipe functions to streamline data pipelines and avoid repetitive code. The code above could be more clealy re-written as:
+
+```{r}
+#| eval: false
+
+# run noise classification and filter out those points
+las <- las |>
+  classify_noise(sor()) |>
+  filter_poi(!(Classification %in% c(7, 18)))
+```
+
+# 7. Subsetting Data
+
+There are many situations in which it would be useful to have a spatial subset of your point cloud data. In fact, the odds that you are somehow magically interested exactly in the ambiguously defined 1 x 1 km grid format the data are delievered in are quite slim. One of the most common reasons you might want a spatial subset of data is if you have field plots within which some data were collected. To ensure spatial compatibility between the data collected in the field and the lidar data, you can clip the lidar data within the field plot(s). The `lidR` package has several clipping functions.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Enter `?lidR::clip` to see all of `lidR`'s clipping functions.</span>
+:::
+
+Let's test a couple of these out. First, we'll use `clip_circle()` to represent a scenario in which we have collected a circular plot representing forest structure and we are aiming to compare the measured structure with lidar metrics.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Get the extent of your lidar tile using the `ext()` function.</span>
+
+- [ ] <span style="color:indianred;">Generate a random x and y coordinate within those bounds (e.g., using `runif()`).</span>
+
+- [ ] <span style="color:indianred;">Feed those coordinates, along with a 15 m radius, into the `clip_circle()` function to generate a plot-clipped point cloud subset.</span>
+
+- [ ] <span style="color:indianred;">Plot the data out.</span>
+:::
+
+```{r}
+# get the extent of your data
+e <- ext(las)
+
+# generate random x and y coords
+x <- runif(1, e[1], e[2])
+y <- runif(1, e[3], e[4])
+
+# clip 15m radius plot
+las_plot <- clip_circle(las, x, y, 15)
+
+# plot it out
+plot(las_plot)
+```
+
+Now, let's clip a transect to examine the ground point classification quality. This is also a fairly common practice, particularly in situations where you have had to perform your own ground point classification. As mentioned earlier, if you are acquiring data from an authoritative source such as the USGS, it is very likely that ground points have already been classified. However, if you are collecting your own lidar data, such as UAS, TLS, or MLS lidar, you will have to perform your own ground point classification. This can be accomplished using `classify_ground()`. For the sake of brevity, this exercise will not cover that function, but it exists!
+
+The goal of the next few steps is to examine a 50 m-long, 2 m-wide transect that is centered on the center point of your tile of lidar data, and runs directly along the x-axis of your data's coordinate reference system (e.g., east-west).
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Get the extent of your lidar tile using the `ext()` function again (or just refer back to your previous call to `ext()`).</span>
+
+- [ ] <span style="color:indianred;">Get the extent's center point in x and y dimensions.</span>
+
+- [ ] <span style="color:indianred;">Get coordinates of the transect end points, 25 m to the left and right of the center point.</span>
+
+- [ ] <span style="color:indianred;">Use the `clip_transect()` function to clip your point cloud data to this transect.</span>
+
+- [ ] <span style="color:indianred;">Use base R plotting (or `ggplot2` if you are an active member of the `tidyverse` cult) to plot the transect's points in 2D along the x axis, colored by classification, where unclassified points are blue and ground points are red.</span>
+:::
+
+```{r}
+# get the extent of your data
+e <- ext(las)
+
+# get the extent center point
+x_center <- mean(e[1:2])
+y_center <- mean(e[3:4])
+
+# get the transect end point x coordinates
+x_left <- x_center - 25
+x_right <- x_center + 25
+p1 <- c(x_left, y_center)
+p2 <- c(x_right, y_center)
+
+# clip the transect data
+las_transect <- clip_transect(las, p1, p2, 2)
+
+# get colors
+col <- rep("blue", nrow(las_transect))
+col[las_transect$Classification == 2] <- "red"
+
+# plot it out in 2D
+plot(
+  x = las_transect$X,
+  y = las_transect$Z,
+  col = col,
+  pch = 16,
+  xlab = "X Coord (m)",
+  ylab = "Elevation (m)",
+  las = 1
+)
+```
+
+# 8. Generating a DTM
+
+Without a doubt, one of the most important functions of airborne lidar data is to enable the production of precise and accurate **digital terrain models (DTMs)**. You may be more familiar with the term **digital elevation model (DEM)**. And then there are also **digital surface models (DSMs)**. Here is a quick clarification of terminology:
+
+- **DTMs** are a rasterized representation of the *elevation of the terrain*.
+- **DSMs** are a rasterized representation of the *elevation of the tallest aboveground surface on top of the terrain* (e.g., trees, buildings).
+- **DEMs** are a generic term that encompasses *any* rasterized representation of elevation, including both DTMs and DSMs.
+
+::: {#fig-dems}
+![](https://upload.wikimedia.org/wikipedia/commons/f/f2/The_difference_between_Digital_Surface_Model_%28DSM%29_and_Digital_Terrain_Models_%28DTM%29_when_talking_about_Digital_Elevation_models_%28DEM%29.svg)
+
+DEMs, DTMs, and DSMs from [Wikimedia Commons](https://upload.wikimedia.org/wikipedia/commons/f/f2/The_difference_between_Digital_Surface_Model_%28DSM%29_and_Digital_Terrain_Models_%28DTM%29_when_talking_about_Digital_Elevation_models_%28DEM%29.svg){target="_blank"}.
+:::
+
+Indeed, the production of nationwide, high-resolution DTMs is the foremost objective of the USGS 3DEP. Quite simply, the production of a DTM from an airborne lidar point cloud involves the **spatial interpolation of ground points**. Thus, it is imperative that you have ground points classified prior to generating a DTM. Theoretically, any spatial interpolation algorithm could be used to generate a DTM, but the `lidR` library has implemented three algorithms within their `rasterize_terrain()` function:
+
+1. `knnidw()`: *k*-nearest neighbor inverse distance weighting interpolation.
+2. `tin()`: triangulated irregular network interpolation.
+3. `kriging()`: Kriging interpolation.
+
+Of the three, `tin()` is by far the simplest computationally and, perhaps as a result, seems to be the most common approach across lidar processing software. However, it is the most subject to noise, as each ground point is fit to the TIN prior to gridding. Thus, if any ground points are misclassified, they will be represented in your final DTM. The other two methods may be somewhat more robust to erroneous data, but are more computationally expensive and may, in fact, yield an overly-smooth DTM if not properly tuned.
+
+For those unfamiliar, a TIN is a vector-based, 3D representation of a surface of some sort (e.g., terrain elevation), where points are connected by a series of non-overlapping triangles. To derive a rasterized DTM from a TIN, the `rasterize_terrain()` function simply overlays a pixel grid on top of the TIN, extracts TIN elevations within each pixel. It's not clear from the documentation, but my suspicion is that it simply takes the TIN value from the pixel's center point. By default, if you have `terra` installed, `lidR::rasterize_*()` functions will return a `terra::SpatRaster` object.
+
+::: {#fig-tin}
+![](https://gisgeography.com/wp-content/uploads/2024/01/TIN-Diagram-550x312.jpg)
+
+Triangulated irregular network (TIN) from [gisgeography.com](https://gisgeography.com/triangular-irregular-network-tin/){target="_blank"}.
+:::
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Generate a 1m-resolution DTM using `rasterize_terrain()` with the `tin()` algorithm and its default parameters.</span>
+
+- [ ] <span style="color:indianred;">Examine the properties of your new DTM by entering its variable name into the console.</span>
+
+- [ ] <span style="color:indianred;">Plot the DTM out using the 2D `plot()` function.</span>
+
+- [ ] <span style="color:indianred;">Plot it out in 3D using `lidR`'s `plot_dtm3d()` function.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# generate a dtm
+dtm <- rasterize_terrain(las)
+
+# check out its summary
+dtm
+
+# plot it out in 2D
+plot(dtm)
+
+# plot it out in 3D
+plot_dtm3d(dtm)
+```
+
+At this point, your DTM only lives in memory -- that is, as soon as you close your R session, it will no longer exist. It is common practice when generating derivative products from lidar point cloud data to save the outputs to disk so that you do not have to repeat the same steps each time you might want to use the resulting DTM. In `terra`, this can be accomplished using the `writeRaster()` function. If you need to read the raster back into memory, you can do so using `rast()`.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Write your DTM to file, storing the output in  your "...\\lidar_data" folder.</span>
+
+- [ ] <span style="color:indianred;">Read it back in using `rast()`.</span>
+:::
+
+```{r}
+# write dtm to file
+writeRaster(dtm, file.path(lidar_dir, "dtm.tif"), overwrite = T)
+
+# read it back in
+dtm <- file.path(lidar_dir, "dtm.tif") |> rast()
+```
+
+Of course, there is an immense number of cool things you could do with the resulting DTM, but for the sake of brevity, we'll leave those up to your imagination.
+
+# 9. Generating a DSM
+
+The process for generating a DSM mirrors that for DTMs in almost every way. There are two main differences:
+
+1. Instead of interpolating a raster surface from ground points, the interpolation is based on **all first return points**. This ensures that the resulting raster represents the elevation of the highest (sampled) surface above the ground. If there are no aboveground features (e.g., trees, buildings), then the ground surface elevation will be represented in the DSM (i.e., DTM == DSM). 
+
+2. The function for generating a DSM in `lidR` is `rasterize_canopy()`. It is a bit of a confusing nomenclature ("why not `rasterize_surface()`?"), but it makes some sense, because you apply the same function to generate a **canopy height model** when supplying it with ground height-normalized point cloud data. **More on this later.** `rasterize_canopy()` has three algorithms implemented:
+
+1. `p2r()`: simple "point to raster" approach, where raster values are assigned the highest single point elevation.
+2. `dsmtin()`: triangulated irregular network interpolation.
+3. `pitfree()`: a modified version of `p2r()` that tries to remedy the gaps (or "pits") that can emerge when interpolating a canopy surface.
+
+For the sake of simplicity, let's stick with `dsmtin()` for now. We will explore the others later on.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Repeat everything you did above, changing function, variable, and output file names as needed.</span>
+:::
+
+::: {.callout-note title="Please note..."}
+There is no `plot_dsm3d()` function, but you can use `plot_dtm3d()`, even if the input is a DSM and not a DTM. Sometimes you've got to break the rules. Live a little.
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# generate a dsm
+dsm <- rasterize_canopy(las, algorithm = dsmtin())
+
+# check out its summary
+dsm
+
+# plot it out in 2D
+plot(dsm)
+
+# plot it out in 3D
+plot_dtm3d(dsm)
+
+# write dsm to file
+writeRaster(dsm, file.path(lidar_dir, "dsm.tif"), overwrite = T)
+
+# read it back in
+dsm <- file.path(lidar_dir, "dsm.tif") |> rast()
+```
+
+If you've used the exercise data, and you look closely, you should be able to see some "lumps" of higher elevation on top of the previously-plotted DTM. Of course, those are trees.
+
+# 10. Generating an nDSM/CHM (Approach #1)
+
+DTMs are inherently useful for a wide range of terrain mapping applications. DSMs are somewhat less commonly used, but still have some useful functions. More useful than a DSM is a **normalized digital surface model (nDSM)**, representing surface heights above the ground. In a forest, this is also known as a **canopy height model (CHM)**. Note that I will use nDSM and CHM interchangeably throughout this exercise, as the example dataset represents a largely forested area. The simplest way to derive an nDSM is by **subtracting the DTM pixel values from the DSM pixel values**. `terra` makes this process trivial -- all basic mathematical functions can be applied directly to `SpatRaster` objects (as long as they align spatially in extent, resolution, origin, and coordinate reference system).
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Generate an nDSM through subtraction, plot it out (in 2D and 3D), write the resulting raster data to file, and read it back in.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# generate ndsm
+ndsm <- dsm - dtm
+
+# plot it out in 2D
+plot(ndsm)
+
+# plot it out in 3D
+plot_dtm3d(ndsm)
+
+# write ndsm to file
+writeRaster(ndsm, file.path(lidar_dir, "ndsm.tif"), overwrite = T)
+
+# read it back in
+ndsm <- file.path(lidar_dir, "ndsm.tif") |> rast()
+```
+
+# 11. Height-Normalization
+
+The keen-eyed may have noticed the previous section's title alluding to the fact that there are multiple approaches for generating a nDSM/CHM. Depending on your needs, there is an argument to be made that the approach just described (DSM - DTM = nDSM) is the lesser of approaches, as it is potentially more subject to an erroneous output. A more nuanced approach for generating a potentially more accurate nDSM is by **height-normalizing your point cloud data**. In effect, this converts lidar point *elevations* (e.g., in meters above mean sea level) to lidar point *heights* (e.g., in meters above the ground). Beyond the potentially minor quality differences between an nDSM derived from DSM-DTM subtraction versus interpolation of a height-normalized point cloud, **there are many situations in which it is inherently useful to have height-normalized lidar point cloud data**. For example, if you are aiming to model vegetation structure using a suite of vegetation structural predictor variables derived from lidar data, you will need height-normalized data to accomplish that task.
+
+In `lidR`, height normalization is accomplished using the aptly named `normalize_height()` function. When examining this function's arguments (i.e., entering `?normalize_height`), it should look very similar to those from a function you previously ran: `rasterize_terrain()`. That is because underneath the hood, they are doing the very same thing -- interpolating ground points to create an approximation of the ground surface. The difference between `rasterize_terrain()` and `normalize_height()` is that the latter takes it one step further by subtracting the ground surface elevation from each lidar point. Note that the function also contains an argument `dtm` to which you can actually supply a DTM `SpatRaster`, which will be the basis of ground subtraction. Although more efficient, the same terrain elevation is subtracted from all points that fall within a given pixel, which can lead to, in effect, a "stair-step" type of uncertainty, particularly in steep environments. So, if accuracy and precision are of primary interest, this approach is generally not favored.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Run `normalize_height()` on your point cloud data, using the `tin()` algorithm with default settings.</span>
+
+- [ ] <span style="color:indianred;">Plot the resulting point cloud out in 3D.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# normalize heights
+las_hgt <- normalize_height(las, tin())
+
+# plot it out
+plot(las_hgt)
+```
+
+# 12. Generating an nDSM/CHM (Approach #2)
+
+Now we're going to repeat what we did a few steps ago -- generating an nDSM -- except this time we're going to use our new, height-normalized point cloud data. Furthermore, we're going to test out three different algorithms for interpolating an nDSM and visually compare them for quality.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Run `rasterize_canopy()` on your height-normalized point cloud data, using the `dsmtin()` algorithm with default settings and save it as "ndsm_dsmtin.tif".</span>
+
+- [ ] <span style="color:indianred;">Run `rasterize_canopy()` again, using the `p2r()` algorithm with default settings and save it as "ndsm_p2r.tif".</span>
+
+- [ ] <span style="color:indianred;">Run `rasterize_canopy()` a third time, using the `pitfree()` algorithm with default settings and save it as "ndsm_pitfree.tif".</span>
+
+- [ ] <span style="color:indianred;">Plot the three nDSMs (in 2D) next to each other on a single plot, zooming in to a 50 x 50m area in the center of your lidar tile (or some other spatial subset that features some trees).</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# generate ndsm using dsmtin(), write to file, and read back in
+ndsm_dsmtin <- rasterize_canopy(las_hgt, algorithm = dsmtin())
+out_file <- file.path(lidar_dir, "ndsm_dsmtin.tif")
+writeRaster(ndsm_dsmtin, out_file, overwrite = T)
+ndsm_dsmtin <- rast(out_file)
+
+# generate ndsm using p2r() and write to file
+ndsm_p2r <- rasterize_canopy(las_hgt, algorithm = p2r())
+out_file <- file.path(lidar_dir, "ndsm_p2r.tif")
+writeRaster(ndsm_p2r, out_file, overwrite = T)
+ndsm_p2r <- rast(out_file)
+
+# generate ndsm using pitfree() and write to file
+ndsm_pitfree <- rasterize_canopy(las_hgt, algorithm = pitfree())
+out_file <- file.path(lidar_dir, "ndsm_pitfree.tif")
+writeRaster(ndsm_pitfree, out_file, overwrite = T)
+ndsm_pitfree <- rast(out_file)
+
+# get spatial subset for plotting
+e <- ext(las_hgt)
+x_center <- mean(e[1:2])
+y_center <- mean(e[3:4])
+x_min <- x_center - 25
+x_max <- x_center + 25
+y_min <- y_center - 25
+y_max <- y_center + 25
+
+# set up plot
+par(mfrow = c(1,3))
+
+# plot the data out
+plot(
+  ndsm_dsmtin, 
+  xlim = c(x_min, x_max), 
+  ylim = c(y_min, y_max),
+  main = "dsmtin"
+)
+plot(
+  ndsm_p2r, 
+  xlim = c(x_min, x_max), 
+  ylim = c(y_min, y_max),
+  main = "p2r"
+)
+plot(
+  ndsm_pitfree, 
+  xlim = c(x_min, x_max), 
+  ylim = c(y_min, y_max),
+  main = "pitfree"
+)
+```
+
+The differences between the three nDSMs are no doubt subtle, but a careful examination reveals that both `dsmtin()` and `pitfree()` yield comparably smoother-looking tree crowns than `p2r()`. Depending on your needs, that smoothness may be considered an advantage (e.g., if you aim to perform some tree crown delineation procedure) or a disadvantage (e.g., if you aim to retain tree structure, noise and all). Although this exercise dataset does not demonstrate this phenomenon very well, both `dsmtin()` and `p2r()` can yield many "pits", where lidar pulses have been able to exploit small gaps in the canopy, and first returns reflect off of lower portions of the canopy, understory vegetation, or even the ground. Here is an example of that:
+
+::: {#fig-pits}
+![](https://rapidlasso.de/wp-content/uploads/2014/11/200_percent_chm_grd.png)
+
+Canopy height model with pits from [rapidlasso.de](https://rapidlasso.de/rasterizing-perfect-canopy-height-models-from-lidar/){target="_blank"}.
+:::
+
+Here is an example of a "pitfree" version of the same dataset:
+
+::: {#fig-pitfree}
+![](https://rapidlasso.de/wp-content/uploads/2014/11/200_percent_chm_pit_free_d10.png)
+
+Canopy height model without pits from [rapidlasso.de](https://rapidlasso.de/rasterizing-perfect-canopy-height-models-from-lidar/){target="_blank"}.
+:::
+
+Accordingly, I generally prefer to use the `pitfree()` algorithm when generating nDSMs/CHMs to ensure both an aesthetically pleasing and analytically sound dataset.
+
+# 13. Area-Based Vegetation Structural Metrics
+
+There are two primary analytical paradigms in airborne lidar-based analysis of vegetation structure:
+
+1. **Area-Based Analysis**
+
+  - One or more metrics that summarize point cloud structure are generated within a series of pixels (i.e., "areas") that span an entire area.
+  - These metrics are often then linked to some physical measure of interest (e.g., field-measured biomass) through machine learning.
+  - Has been the dominant paradigm for decades.
+  
+2. **Individual Tree-Based Analysis**
+
+  - One or more metrics that summarize point cloud structure are generated within a series of polygons that approximately represent the crowns of individual trees/shrubs.
+  - These metrics can potentially stand alone (i.e., indiviudal tree heights), or be further linked to some physical measure of of interest.
+  - Importantly, **requires that tree crowns are delineated in some automated, semi-automated, or (hopefully not!) manual manner**. More on this in the next section.
+  - Has taken hold in recent years as more high-resolution lidar data have become available as it provides a greater level of precision.
+  
+::: {#fig-abavsitc}
+![](https://ars.els-cdn.com/content/image/1-s2.0-S0034425717301098-gr1_lrg.jpg)
+
+Area-based versus individual tree-based analysis approaches from  [Coomes et al. (2017)](https://doi.org/10.1016/j.rse.2017.03.017){target="_blank"}.
+:::
+  
+In this section, we will focus on #1. In the next section, we will focus on #2. The `lidR` function for computing area-based structural metrics is `pixel_metrics()`. If you enter `?pixel_metrics`, not only will you see the parameters needed for executing that function, you will see a host of other `*_metrics()` functions within `lidR` that operate in a very similar manner. All of them hinge on the supply of a user-defined function to the argument `func`. These functions can range from exceedingly simple to extremely complex. There are a few considerations when creating these functions:
+
+1. They should return a **list**.
+2. In the case of `pixel_metrics()`, each item in that list will yield a raster dataset. So, if you list has two metrics, you will produce a 2-layered raster dataset, where pixels in each layer represent the metric defined by the function.
+3. They should be referenced with a tilde (`~`) when supplied to the `func` parameter. For example, if you had a function named `cr_mets()`, and it had one argument `z`, you would supply that to `crown_metrics()` like `func = ~cr_mets(Z)`.
+4. The lidar point cloud column names supplied to the function should not be in quotes. `func = ~cr_mets("Z")` would fail, for example.
+
+This is described in much greater detail in [the lidR book](https://r-lidar.github.io/lidRbook/metrics.html){target="_blank"}, but hopefully this is enough information to get you started.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Write a function that returns a list with two items: (1) `mean_z`, which calculates the mean Z value (height) for each pixel in your height-normalized point cloud data; and (2) `max_z`, which calculates the maximum Z value.</span>
+
+- [ ] <span style="color:indianred;">Supply that function, along with your height-normalized lidar point cloud data to `pixel_metrics()` to generate a 2-band `SpatRaster`, with a spatial resolution of 10m.</span>
+
+- [ ] <span style="color:indianred;">Plot those raster datasets out.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# function for mapping mean and maximum height
+f <- function(z){
+  list(
+    mean_z = mean(z),
+    max_z = max(z)
+  )
+}
+
+# apply function to generate 10m map of mean and max height
+r <- pixel_metrics(las_hgt, ~f(Z), 10)
+
+# plot it out
+plot(r)
+```
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Write a new function that calculates canopy cover, according to the following steps.</span>
+
+- [ ] <span style="color:indianred;">It only relies on first returns (`ReturnNumber == 1`).</span>
+
+- [ ] <span style="color:indianred;">The numerator of the canopy cover calculation is the number of first returns taller than or equal to 2m in height.</span>
+
+- [ ] <span style="color:indianred;">The denominator of the canopy cover calculation is the total number of first returns at any height.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# function for mapping canopy cover
+f <- function(z, r){
+  z <- z[r == 1]
+  numer <- length(z[z >= 2])
+  denom <- length(z)
+  cc <- numer / denom
+  l <- list(cc = cc)
+  return(l)
+}
+
+# apply function to generate 10m map of canopy cover
+r <- pixel_metrics(las_hgt, ~f(Z, ReturnNumber), 10)
+
+# plot it out
+plot(r)
+```
+
+This map (hopefully) represents the proportion of returns that intercepted the canopy relative to all returns, therefore representing the proportional canopy cover.
+
+# 14. Delineating Tree Crowns
+
+One of the really cool things you can do with height-normalized lidar point cloud data is **delineate individual tree crowns**. This assumes, of course, that your lidar dataset covers an area that features trees, which our exercise dataset does. By now I feel like a parrot when I say "there are many algorithms that can be employed...", but I must once again repeat this statement. When delineating tree crowns, there are a host of different algorithms one could use. In fact, there are hundreds (thousands?). If you enter ["delineate tree crowns from airborne lidar" into Google Scholar](https://scholar.google.com/scholar?hl=en&as_sdt=0%2C45&q=delineate+tree+crowns+from+airborne+lidar&btnG=){target="_blank"}, you will see 15k+ results at the time this exercise was written. Thankfully, the `lidR` library has incorporated a limited (but still diverse) set of tree crown delineation algorithms, giving you a useful degree of constrained flexibility.
+
+In `lidR`, tree crown delineation is really a two-step process:
+
+**1. Detecting tree tops**
+  
+  - Using the height-normalized point cloud or the rasterized CHM, using some function to identify tree top points.
+  
+**2. Delineating crowns**
+
+  - Using the identified tree top points as "seeds", the structure of the point cloud or CHM is then used to assign lidar points (or CHM pixels) to one tree or another based on its shape, connectedness, etc.
+  
+The [lidR book](https://r-lidar.github.io/lidRbook/itd.html){target="_blank"} does a great job of walking through this procedure and evaluating the effects of different approaches. For the sake of this much more cursory exercise, we will step through a singular workflow to achieve a hopefully desirable (though certainly imperfect!) result.
+
+## a. Subsetting our point cloud
+
+Let's begin by subsetting our point cloud to a smaller area. Tree crown delineation can be a fairly computationally expensive process, so working within smaller areas (especially for testing purposes) can be highly beneficial. Furthermore, visually interpreting the outputs is much easier when viewing a local area rather than an entire 1 km^2^ tile of lidar data.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Clip your height-normalized lidar data to a 100 x 100 m area in the center of your tile.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# get spatial subset for clipping
+e <- ext(las_hgt)
+x_center <- mean(e[1:2])
+y_center <- mean(e[3:4])
+x_min <- x_center - 50
+x_max <- x_center + 50
+y_min <- y_center - 50
+y_max <- y_center + 50
+
+# clip height-normalized lidar data
+las_clip <- clip_rectangle(
+  las_hgt,
+  x_min,
+  y_min,
+  x_max,
+  y_max
+)
+```
+
+## b. Detecting tree tops
+
+In a perfect world, you would know exactly where all of the tree tops are located within an area of interest. If you are working within relatively small field plots, it is conceivable that you could measure tree top point locations on the ground using a high-accuracy GPS. However, that is not a very scalable solution. So we are often left to rely on automatic tree top detection approaches. In `lidR`, this is accomplished using a **moving window** approach, using one of two window types:
+
+**1. Fixed-diameter**
+
+  - Simpler but almost certainly less accurate approach that identifies the highest point or pixel within a circular window defined by a fixed diameter. Logically, the diameter of choice should approximately match the typical tree crown diameter. A window that is too large will yield errors of omission (i.e., underdetection/undersegmentation). A window that is too small will yield errors of commission (i.e., overdetection/oversegmentation).
+  
+**2. Dynamically sized**
+
+  - More complex approach that requires some understanding of local tree allometry. The window size can vary based on the point/pixel heights. The underlying assumption here is that taller trees tend to have larger crowns, and shorter trees tend to have smaller crowns. By defining a height-to-crown width function, rather than supplying a singular, fixed-window size, you may be able to capture a more accurate depiction of tree tops. **This is the approach we will take.**
+  
+In `lidR`, the function for identifying tree tops is `locate_trees()` and the algorithm you supply to it for parameterizing your moving window is `lmf()`. 
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Take a look at the documentation for each of these functions.</span>
+:::
+
+We need a height-to-crown width function to supply to `lmf()`. We could, of course, make one up. For example, we could assume that trees are generally 5x taller than their crown width. Of course, that depends highly on species and setting. In our region, for example, juniper trees can often be as wide as they are tall (i.e., crown width = 1 x tree height). Conversely, subalpine fir trees can have extremely narrow crowns (i.e., crown width = 0.1 x tree height). Knowing the species composition of your study area may be highly beneficial for generating a locally calibrated local maximum filter.
+
+To that end, let's take a look at [TALLO: a global tree allometry and crown architecture database](https://github.com/selva-lab-repo/TALLO){target="_blank"}. We will plot out and attempt to model crown width as a function of tree height using species that are known to be in our example study area.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Navigate to *DB -> Tallo.csv.zip*, download the data into your `other_dir` folder, and extract it.</span>
+
+- [ ] <span style="color:indianred;">Read the data in.</span>
+
+- [ ] <span style="color:indianred;">Limit to just tree species found within the study area (note that this will differ, of course, if you've chosen your own study area):</span>
+  - <span style="color:indianred;">*Abies lasiocarpa* (subalpine fir)</span>
+  - <span style="color:indianred;">*Abies concolor* (white fir)</span>
+  - <span style="color:indianred;">*Populus tremuloides* (quaking aspen)</span>
+  - <span style="color:indianred;">*Pseudotsuga menziesii* (Douglas-fir)</span>
+  - <span style="color:indianred;">*Picea engelmannii* (Engelmann spruce)</span>
+  - <span style="color:indianred;">*Picea pungens* (blue spruce)</span>
+
+- [ ] <span style="color:indianred;">Knowing that several of these species span vast reaches of North America, and may be very structurally different than they are in our study area, further subset the data to an "interior western US" box defined by Latitude 30N - 50N and Longitude 100W - 120W.</span>
+
+- [ ] <span style="color:indianred;">Create a field called `crown_diameter_m` the doubles the `crown_radius_m`, since the `lmf()` filter relies on a diameter measurement.</span>
+
+- [ ] <span style="color:indianred;">Create a scatter plot with the remaining data, comparing tree height (x-axis) to tree crown radius (y-axis).</span>
+
+- [ ] <span style="color:indianred;">Build a linear model that models crown radius as a function of tree height, add the regression line to your plot, and get the model coefficients.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# read in the tallo data
+df_tallo <- file.path(other_dir, "Tallo.csv") |> read.csv()
+
+# subset to just species of interest
+sp <- c(
+  "Abies lasiocarpa", # subalpine fir
+  "Abies concolor", # white fir
+  "Populus tremuloides", # quaking aspen
+  "Pseudotsuga menziesii", # Douglas-fir
+  "Picea engelmannii", # Engelmann spruce
+  "Picea pungens" # blue spruce
+)
+df_tallo <- df_tallo[df_tallo$species %in% sp,]
+
+# subset to just dry western us
+df_tallo <- df_tallo[
+  df_tallo$latitude >= 30 &
+    df_tallo$latitude <= 50 &
+    df_tallo$longitude <= -100 &
+    df_tallo$longitude >= -120,
+]
+
+# remove rows without necessary data
+df_tallo <- df_tallo[
+  complete.cases(df_tallo[,c("height_m", "crown_radius_m")]),
+]
+
+# compute crown diameter
+df_tallo$crown_diameter_m <- df_tallo$crown_radius_m * 2
+
+# get point colors by density
+dc <- densCols(
+  x = df_tallo$height_m,
+  y = df_tallo$crown_diameter_m,
+  colramp = colorRampPalette(c("black", "white"))
+)
+df_tallo$pt_dens <- col2rgb(dc)[1,] + 1L
+df_tallo <- df_tallo[order(df_tallo$pt_dens),]
+cols <- viridis(256)
+df_tallo$col <- cols[df_tallo$pt_dens]
+
+# plot crown radius versus height
+plot(
+  crown_diameter_m ~ height_m,
+  data = df_tallo,
+  pch = 16,
+  col = df_tallo$col,
+  xlab = "Tree Height (m)",
+  ylab = "Crown Radius (m)",
+  las = 1
+)
+
+# fit linear model
+mod <- lm(crown_diameter_m ~ height_m, data = df_tallo)
+mod_x <- range(df_tallo$height_m)
+mod_y <- predict(mod, newdata = list(height_m = mod_x))
+lines(mod_y ~ mod_x, col = "hotpink", lwd = 3)
+
+# get linear model summary
+summary(mod)
+```
+
+It's definitely not a perfect linear correlation, but the model explains over half of the variance in crown radius, so it's a much better starting point than a random guess! For the example data, this yields the following local maximum filter function:
+
+$$d = 0.2z + 1.2$$
+
+where $d$ is the crown diameter and $z$ is the tree height, both in meters. We can now translate this into an R function that can be fed to `lmf()` which, in turn, can be fed to `locate_trees()` to identify treetops in our study area.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Translate the equation above into a function with a single argument (height) that returns a filter size (i.e., a crown diameter).</span>
+
+- [ ] <span style="color:indianred;">Supply that function to `lmf()`, while also specifying a minimum tree height of 2 m and a circular filter shape.</span>
+
+- [ ] <span style="color:indianred;">Supply your `lmf()` function to `locate_trees()`, along with your clipped point cloud data.</span>
+
+- [ ] <span style="color:indianred;">Plot the point cloud in 3D, making sure to assign the plot to a variable name (e.g., `x <- plot(...)`).</span>
+
+- [ ] <span style="color:indianred;">Add the treetop points using the `add_treetops3d()` function.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# create lmf function
+f <- function(z) {0.2 * z + 1.2}
+l <- lmf(f, 2, "circular")
+
+# identify treetops
+ttops <- locate_trees(las_clip, l)
+
+# plot it out in 3D
+x <- plot(las_clip, bg = "white", size = 4)
+add_treetops3d(x, ttops)
+```
+
+Looks pretty good!
+
+## c. Segmenting tree crowns
+
+Now that we have our treetop seed points, we can feed those into one of several segmentation algorithms. **Tree segmentation is the process by which points in a cloud (and/or pixels in a CHM) are assigned to (classified by) the tree to which they most likely belong**. It is an imperfect but very useful procedure, especially when tree structural variables (e.g., height, biomass, etc.). One of the reasons it is imperfect is because most segmentation algorithms, including those included in `lidR`, tend only to be good at segmenting **overstory** trees -- that is, the trees whose crows can be seen from above. Understory trees are likely to be missed or lumped into the segment of tree crowns that overtop them. 
+
+To see all of the tree segmentation algorithms available in `lidR`, you can enter `?segment_trees`. Feel free to explore them each on your own, but for the sake of this exercise, we will use `dalponte2016()`. The algorithm is described in [Dalponte & Coomes (2016)](https://doi.org/10.1111/2041-210X.12575){target="_blank"}. It is a region-growing algorithm that iteratively associates pixels surrounding the treetop points to each tree according to a few rules defined by the parameters `th_tree` (minimum tree height), `th_seed` (region growing parameter 1), `th_cr` (region growing parameter 2), and `max_cr` (the maximum crown diameter).
+
+Before segmenting trees in the example dataset, however, we are going to have to first generate a new CHM that matches the extent of our clipped point cloud data, since the previous CHM was generated from the full tile of data.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Use `rasterize_canopy()` to generate a 0.25 m-resolution CHM within the extent of your clipped point cloud data with the `pitfree()` algorithm.</span>
+
+- [ ] <span style="color:indianred;">Use `segment_trees()` to delineate tree crowns in your clipped lidar data using the `dalponte2016()` algorithm with default parameters.</span>
+
+- [ ] <span style="color:indianred;">Plot the resulting point cloud in 3D, coloring points by the newly-added field `treeID`.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# generate 25cm chm
+chm_trees <- rasterize_canopy(las_clip, 0.25, pitfree())
+
+# segment tree crowns
+las_trees <- segment_trees(las_clip, dalponte2016(chm_trees, ttops))
+
+# plot in 3d by tree id
+plot(las_trees, color = "treeID")
+```
+
+At least in the example dataset, the default segmentation parameters yielded subpar results, with lots of points being left unclassified. This is likely due to the **high spatial resolution of the CHM and the fact that `max_cr` is based on number of pixels.** Let's run again with a much larger `max_cr` value to hopefully yield an improved delineation.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Use `segment_trees()` again, but set `max_cr` to 50.</span>
+
+- [ ] <span style="color:indianred;">Plot the resulting point cloud in 3D, coloring points by the newly-added field `treeID`.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# generate 25cm chm
+chm_trees <- rasterize_canopy(las_clip, 0.25, pitfree())
+
+# segment tree crowns
+las_trees <- segment_trees(
+  las_clip, 
+  dalponte2016(
+    chm = chm_trees, 
+    treetops = ttops,
+    max_cr = 50
+  )
+)
+
+# plot in 3d by tree id
+plot(las_trees, color = "treeID")
+```
+
+A marked improvement, no doubt. But still clearly imperfect. There are many different approaches one could take to automate and assess the effects of delineation algorithm parameters, but doing so is beyond the scope of this exercise. Feel free to play with the parameters some more if you desire a better delineation. For the sake of the remainder of this exercise, we'll stick with this delineation, and see what fun things we can do with it.
+
+## d. Getting individual tree metrics
+
+Using the previously delineated trees, we can derive some useful structural metrics for each tree in your area of interest. This is extremely useful for forest ecology (understanding forest structure over space), fire ecology (understanding fuel structure over space), forestry (quantifying merchantable timber), and even carbon accounting (deriving tree-level carbon estimates through allometry). It could even be used to help create a training database for a machine learning model that attempts to map some structural parameter over large areas -- a task that can be very arduous to do manually.
+
+In `lidR`, this is accomplished very simply using the `crown_metrics()` function. This function returns an `sf` object, either `POINT` or `POLYGON` depending on the user-defined `geom` of interest. As discussed in a previous section, the `*_metrics()` functions in `lidR` allow you to summarize point cloud data within some geometry of interest -- in this case, tree crown polygons. For `crown_metrics()`, you can choose several different geometries, including point` (single point for each delineated tree), `convex` (convex hull around delineated trees), `concave` (concave hull), and `bbox` (bounding box).
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Write a function that returns the maximum lidar point z value (height above ground) within each tree crown.</span>
+
+- [ ] <span style="color:indianred;">Use `crown_metrics`.</span>
+
+- [ ] <span style="color:indianred;">Plot the resulting point cloud in 3D, coloring points by the newly-added field `treeID`.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# define a function for summarizing tree structure
+f <- function(z){
+  list(max_z = max(z))
+}
+
+# get tree polygons
+crowns <- crown_metrics(
+  las = las_trees,
+  func = ~f(Z),
+  geom = "concave"
+)
+
+# examine the crowns sf polygon object
+crowns
+```
+
+If you are not familiar with the `sf` library, it is a world unto itself well worth your exploration time at some later date. For now, we'll use it in a very basic way -- to plot out the tree crowns and their associated heights in 2D. Take a quick look here to learn how to do that: [https://r-spatial.github.io/sf/articles/sf5.html](https://r-spatial.github.io/sf/articles/sf5.html){target="_blank"}. 
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Plot out your tree crowns, with polygons being colored by tree height.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# plot out 
+plot(crowns["max_z"])
+```
+
+# 15. Working with LAScatalogs
+
+By now you're probably asking yourself "why did I download four tiles of lidar data when all we've processed so far is one?!" You would be right to ask that question, and your fury is completely justified. But rage no more, my friend, because you have now arrived at this exercise's final destination: **the LAScatalog**.
+
+`LAScatalog` is an awesome object type in `lidR` that allows users to apply the same set of functions to a set of lidar tiles, rather than operating on each tile separately. The entire package is designed so that nearly any function applied to a `LAS` object can also be applied to a `LAScatalog` object, and vice versa. Not only that, but they allow for parallel processing of your lidar tiles, which can considerably speed up your data processing, especially if you are working with a large extent. Furthermore, they are designed with tile topology in mind, with built-in buffering capability that ensures that there will be no edge effects in landscape products derived from tiled lidar data. The vast majority of the time you are working with lidar data, you are all but certain to be working with `LAScatalog` objects more than `LAS` objects, because tiling is the industry standard for data delivery and you need computational solutions that treat tiles as parts of a whole, rather than meaningful units unto themselves.
+
+## a. Reading the data in
+
+To read your point cloud data in as a `LAScatalog`, you can use the `readLAScatalog()` function. Like its single-tile counterpart, `readLAS()`, `readLAScatalog()` allows you to `select` a subset of columns or `filter` to a refined set of points. Unlike its counterpart, you can supply the function's `folder` argument with the file directory in which your tiles are stored.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Read your four tiles of lidar data in using `readLAScatalog()`, making sure to filter out noisy and withheld points.</span>
+
+- [ ] <span style="color:indianred;">Examine the resulting object's properties by entering the variable name into the console.</span>
+
+- [ ] <span style="color:indianred;">Plot the spatial extents of the four tiles using `plot()`.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# read in the lascatalog data
+ctg <- readLAScatalog(raw_dir, filter = "-drop_class 7 18 -drop_withheld")
+
+# examine it
+ctg
+
+# plot it out
+plot(ctg)
+```
+
+## b. Generate spatial index files
+
+One of the things that makes `LAScatalogs` so powerful is their inherent awareness of topology. Knowing which tiles, and which points within those tiles, are adjacent to points in neighboring tiles allows for seamless analysis of tiled data. This topology is created through **spatial indexing**. [First introduced by *LAStools*](https://rapidlasso.de/lasindex-spatial-indexing-of-lidar-data/){target="_blank"}, the spatial indexing system for LAS/LAZ data involves the creation of **LAX files**. These are very small files that can be rapidly generated for each LAS/LAZ file in a directory that efficiently store point locations through a quadtree-based position encoding system. You can read in and process `LAScatalogs` without LAX files, but ([as noted in the lidR book](https://r-lidar.github.io/lidRbook/spatialindex.html#sec-spatial-indexing-files){target="_blank"}) processing efficiency is considerably reduced.
+
+So, the question is: **how do we generate LAX files?** Interestingly, `lidR` does not have its own indexing function. Instead, [it suggests using `LAStools` to generate these indices](https://r-lidar.github.io/lidRbook/spatialindex.html#sec-spatial-indexing-files:~:text=By%20adding%20.lax,file.las%22){target="_blank"}. As an alternative, it points to a function in the `rlas` library, which is a major dependency of `lidR`, written by the same author, that contains some lower-level functions. Among those functions is `writelax()`, which allows you to generate a spatial index (LAX) file for a single input LAS/LAZ file.
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Use `rlas::writelax()` to generate spatial index files for each of your lidar tiles.</span>
+
+- [ ] <span style="color:indianred;">Read in your `LAScatalog` again.</span>
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# geneate lax files
+raw_files <- list.files(raw_dir, pattern = "*.laz$", full.names = T)
+for (raw_file in raw_files){
+  rlas::writelax(raw_file)
+}
+
+# read in your lascatalog again
+ctg <- readLAScatalog(raw_dir, filter = "-drop_class 7 18 -drop_withheld")
+```
+
+## c. `LAScatalog` processing options
+
+There are several options that you may need to manipulate while working with `LAScatalogs`. You can see the full list by entering `?"LAScatalog-class"` into the console. Below I will highlight a few that you are most likely to employ:
+
+**1. chunk_size:**
+
+  - Regardless of the dimensions of your tiles, because of `LAScatalogs`' topology, you can actually process "chunks" (i.e., pseudo-tiles) of any dimensions. This is particularly handy if you are working on a computer that does not have a lot of RAM, and/or are working with extremely large point cloud files. In situations like these, you could define smaller chunks than the original tile dimensions, allowing less data to be read in at once during processing.
+  - The syntax for setting chunk size is: `opt_chunk_size(ctg) <- x`, where `ctg` is your `LAScatalog` object and `x` is the length and width of the chunk in the units of the data's coordinate reference system.
+  
+**2. buffer:**
+
+  - This defines the distance around each chunk/tile that is used to pull in points from neighboring chunks/tiles during processing to avoid edge artifacts.
+  - The syntax for setting buffer size is: `opt_chunk_buffer(ctg) <- x`, where `ctg` is your `LAScatalog` object and `x` is the buffer size in the units of the data's coordinate reference system.
+  
+**3. laz_compression:**
+
+  - This is a boolean indicator that defines, for functions that may yield output chunk/tile point cloud files, whether you would like them to be LAS files (`FALSE`) or LAZ files (`TRUE`).
+  - The syntax for setting buffer size is: `opt_laz_compression(ctg) <- x`, where `ctg` is your `LAScatalog` object and `x` is either `TRUE` (or `T`) or `FALSE` (or `F`).
+  
+**4. output_files:**
+
+  - Particularly when working with large lidar datasets containing many tiles of data, it can be very useful to save intermediate output files that result from applying some function to a `LAScatalog`. For example, if you are generating a DTM from many chunks/tiles, you may want to store each chunk/tile's DTM in a file directory. This avoids having to store all of that data in memory, allowing you to subsequently read the tiled DTMs in (as a `terra::vrt`, for example) from disk.
+  - The syntax for setting buffer size is: `opt_output_files(ctg) <- x`, where `ctg` is your `LAScatalog` object and `x` is a file path template used to name the output files. There are a few template options:
+    - {XLEFT}, {XRIGHT}, {YBOTTOM}, {YTOP}, {ID}, {XCENTER}, {YCENTER}, and {ORIGINALFILENAME}
+    - For example, if you wanted to save output files as the same name as the original files in a new folder, you might have code that looks something like this:
+    
+```{r}
+#| eval: false
+
+# directory structure
+in_dir <- "c:/raw_lidar_data"
+out_dir <- "c:/dtms"
+
+# read data in
+ctg <- readLAScatalog(in_dir)
+
+# set output files
+opt_output_files(ctg) <- file.path(out_dir, "{ORIGINALFILENAME}")
+
+# generate dtms, saving each tile
+rasterize_terrain(ctg)
+```
+
+In the example above, if `in_dir` had two tiles ("tile_1.laz" and "tile_2.laz"), the successful execution of this script would yield two DTM tiles in `out_dir` ("tile_1.tif" and "tile_2.tif").
+
+Note that there are other `LAScatalog` processing options that some `lidR` users might interact with (e.g., `stop_early`, `alignment`, `drivers`), but those are beyond the scope of this high-level overview. If you can familiarize yourself with the syntax and logic of setting a few of these processing options, you can easily figure out how to set others.
+
+## d. Parallelization with `future`
+
+As mentioned earlier, `LAScatalogs` allow for efficient data processing through **parallelization**. As described in the documentation when you enter `?"lidR-parallelism"` into the console, `lidR` allows for two different types of parallelization:
+
+**1. Algorithm-based parallelization**
+
+  - This is when individual functions are natively parallelized, meaning that even when processing a single chunk/tile of data, the underlying process can leverage multiple cores to make it execute more quickly.
+  - Setting the parallelization in this context is accomplished through `set_lidr_threads(x)`, where `x` is the number of cores you want to use.
+
+**2. Chunk-based parallelization**
+
+  - This is when data from several chunks/tiles is read in using multiple cores and some function is applied to each simultaneously.
+  - Setting the parallelization in this context is accomplished by setting up a `multisession` using the `future` library.
+  - The syntax for chunk-based parallelization is as follows:
+  
+```{r}
+#| eval: false
+
+# set up multisession with 5 workers (i.e., employ 5 CPU cores)
+plan(multisession, workers = 5L)
+
+# read in your data
+ctg <- readLAScatalog(in_dir)
+
+# run some process
+dtm <- rasterize_terrain(ctg)
+
+# end multisession
+plan(sequential)
+```
+
+In both of these cases, it is important to be cautious about balancing CPU usage with RAM. For example, if you have 10 cores on your machine, you may be tempted to employ all of them in a chunk-based parallelization. But, if each of the chunks contains 5GB of data, this would require 50GB of RAM, as `lidR` reads entire chunks in at once.
+
+## e. Generate some products from your LAScatalog
+
+Now, let's pull all of this to the test!
+
+::: {style="font-size: 125%;"}
+- [ ] <span style="color:indianred;">Begin chunk-based parallelization using the `plan()` function, setting the number of workers somewhere between 1 and 4. 4 will yield the fastest results, but will require the most RAM. 1 will provide no added benefit processing time-wise to sequential processing.</span>
+
+- [ ] <span style="color:indianred;">Read in your `LAScatalog` again, filtering noise and withheld points.</span>
+
+- [ ] <span style="color:indianred;">Generate a 1m-resolution DTM from your `LAScatalog`, using `rasterize_terrain()` with `the `tin()` algorithm, making sure to write each of your individual tiles to their own files in the `dtm_dir` with their original tile names, and writing the final, mosaicked file (`dtm.tif`) to `lidar_dir`.</span>
+
+- [ ] <span style="color:indianred;">Generate a 1m-resolution DSM from your `LAScatalog`, using `rasterize_canopy()` with the `dsmtin()` algorithm, making sure to write each of your individual tiles to their own files in the `dsm_dir` with their original tile names, and writing the final, mosaicked file (`dsm.tif`) to `lidar_dir`.</span>
+
+- [ ] <span style="color:indianred;">Normalize heights `LAScatalog`, using `normalize_height()` with the `tin()` algorithm, making sure to set `laz_compression` to `TRUE`, writing each of your individual tiles to their own files in the `hgt_dir` with their original tile names.</span>
+
+- [ ] <span style="color:indianred;">Read in your new, height-normalized data as a separate `LAScatalog`, still filtering noisy and withheld points.</span>
+
+- [ ] <span style="color:indianred;">Generate a 1m-resolution CHM from your height-normalized `LAScatalog`, with `rasterize_canopy()` using the `pitfree()` algorithm, making sure to write each of your individual tiles to their own files in the `chm_dir` with their original tile names, and writing the final, mosaicked file (`chm.tif`) to `lidar_dir`.</span>
+
+- [ ] <span style="color:indianred;">Generate a 10m-resolution canopy cover map from your height-normalized `LAScatalog`, with `pixel_metrics()` along with a custom function that calculates canopy cover (number of first returns above 2m / number of all first returns), making sure to write each of your individual tiles to their own files in the `veg_dir` with their original tile names, and writing the final, mosaicked file (`cc.tif`) to `lidar_dir`.</span>
+
+- [ ] <span style="color:indianred;">End your parallel session.</span>
+
+- [ ] <span style="color:indianred;">Read each of your study area-wide products (DTM, DSM, CHM, CC) back in as `SpatRaster` objects.</span>
+
+- [ ] <span style="color:indianred;">Plot out each of them out.</span>
+:::
+
+::: {.callout-note title="A note about overwriting SpatRaster tiles..."}
+In the code snippet below, you will see the following line in several places:
+
+`ctg@output_options$drivers$SpatRaster$param$overwrite <- T`
+
+This mess of code is specifically designed to ensure that, if the script is run multiple times, it will not return an error when trying to write individual raster tiles (DTM, DSM, CHM, and CC) to files.
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+# begin parallelization
+plan(multisession, workers = 2L)
+
+# read in lascatalog
+ctg <- readLAScatalog(raw_dir, filter = "-drop_class 7 18 -drop_withheld")
+
+# generate dtm
+opt_output_files(ctg) <- file.path(dtm_dir, "{ORIGINALFILENAME}")
+ctg@output_options$drivers$SpatRaster$param$overwrite <- T
+dtm <- rasterize_terrain(ctg)
+writeRaster(dtm, file.path(lidar_dir, "dtm.tif"), overwrite = T)
+
+# generate dsm
+opt_output_files(ctg) <- file.path(dsm_dir, "{ORIGINALFILENAME}")
+ctg@output_options$drivers$SpatRaster$param$overwrite <- T
+dsm <- rasterize_canopy(ctg, algorithm = dsmtin())
+writeRaster(dsm, file.path(lidar_dir, "dsm.tif"), overwrite = T)
+
+# normalize heights
+opt_output_files(ctg) <- file.path(hgt_dir, "{ORIGINALFILENAME}")
+opt_laz_compression(ctg) <- T
+normalize_height(ctg, tin())
+
+# generate canopy height model
+ctg_hgt <- readLAScatalog(hgt_dir, filter = "-drop_class 7 18 -drop_withheld")
+opt_output_files(ctg_hgt) <- file.path(chm_dir, "{ORIGINALFILENAME}")
+ctg_hgt@output_options$drivers$SpatRaster$param$overwrite <- T
+chm <- rasterize_canopy(ctg_hgt, algorithm = pitfree())
+writeRaster(chm, file.path(lidar_dir, "chm.tif"), overwrite = T)
+
+# generate canopy cover raster
+f <- function(z, r){
+  z <- z[r == 1]
+  numer <- length(z[z >= 2])
+  denom <- length(z)
+  cc <- numer / denom
+  l <- list(cc = cc)
+  return(l)
+}
+opt_output_files(ctg_hgt) <- file.path(veg_dir, "{ORIGINALFILENAME}")
+ctg_hgt@output_options$drivers$SpatRaster$param$overwrite <- T
+cc <- pixel_metrics(ctg_hgt, ~f(Z, ReturnNumber), 10)
+writeRaster(cc, file.path(lidar_dir, "cc.tif"), overwrite = T)
+
+# end parallelization
+plan(sequential)
+
+# read them back in
+dtm <- file.path(lidar_dir, "dtm.tif") |> rast()
+dsm <- file.path(lidar_dir, "dsm.tif") |> rast()
+chm <- file.path(lidar_dir, "chm.tif") |> rast()
+cc <- file.path(lidar_dir, "cc.tif") |> rast()
+
+# plot outputs
+plot(dtm)
+plot(dsm)
+plot(chm)
+plot(cc)
+```
